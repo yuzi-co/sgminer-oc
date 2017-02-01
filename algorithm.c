@@ -41,6 +41,7 @@
 #include "algorithm/blakecoin.h"
 #include "algorithm/sia.h"
 #include "algorithm/decred.h"
+#include "algorithm/pascal.h"
 #include "algorithm/lbry.h"
 #include "algorithm/sibcoin.h"
 
@@ -54,6 +55,7 @@ const char *algorithm_type_str[] = {
   "Credits",
   "Scrypt",
   "NScrypt",
+  "Pascal",
   "X11",
   "X13",
   "X14",
@@ -200,6 +202,25 @@ static cl_int queue_scrypt_kernel(struct __clState *clState, struct _dev_blk_ctx
   CL_SET_VARG(4, &midstate[0]);
   CL_SET_VARG(4, &midstate[16]);
   CL_SET_ARG(le_target);
+
+  return status;
+}
+
+static cl_int queue_pascal_kernel(struct __clState *clState, struct _dev_blk_ctx *blk, __maybe_unused cl_uint threads)
+{
+  cl_kernel *kernel = &clState->kernel;
+  unsigned int num = 0;
+  cl_ulong le_target;
+  cl_int status = 0;
+
+  le_target = *(cl_ulong *)(blk->work->device_target + 24);
+  flip196(clState->cldata, blk->work->data);
+  status = clEnqueueWriteBuffer(clState->commandQueue, clState->CLbuffer0, true, 0, 196, clState->cldata, 0, NULL, NULL);
+
+  CL_SET_ARG(clState->CLbuffer0);
+  CL_SET_ARG(clState->outputBuffer);
+  CL_SET_ARG(le_target);
+  CL_SET_ARG(blk->work->midstate);
 
   return status;
 }
@@ -1205,6 +1226,8 @@ static algorithm_settings_t algos[] = {
   { "vanilla",     ALGO_VANILLA,   "", 1, 1, 1, 0, 0, 0xFF, 0xFFFFULL, 0x000000ffUL, 0, 128, 0, blakecoin_regenhash, blakecoin_midstate, blakecoin_prepare_work, queue_blake_kernel, gen_hash, NULL },
 
   { "lbry", ALGO_LBRY, "", 1, 256, 256, 0, 0, 0xFF, 0xFFFFULL, 0x0000ffffUL, 2, 4 * 8 * 4194304, 0, lbry_regenhash, NULL, NULL, queue_lbry_kernel, gen_hash, NULL },
+
+  { "pascal", ALGO_PASCAL, "", 1, 1, 1, 0, 0, 0xFF, 0xFFFFULL, 0x0000ffffUL, 0, 0, CL_QUEUE_OUT_OF_ORDER_EXEC_MODE_ENABLE, pascal_regenhash, pascal_midstate, NULL, queue_pascal_kernel, NULL, NULL },
 
   // Terminator (do not remove)
   { NULL, ALGO_UNK, "", 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, NULL, NULL, NULL, NULL, NULL }
