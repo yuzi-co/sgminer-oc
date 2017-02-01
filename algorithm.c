@@ -79,7 +79,8 @@ const char *algorithm_type_str[] = {
   "Sia",
   "Decred",
   "Vanilla",
-  "Lbry"
+  "Lbry",
+  "Sibcoin"
 };
 
 void sha256(const unsigned char *message, unsigned int len, unsigned char *digest)
