@@ -128,6 +128,17 @@ void sha256d_midstate(struct work *work)
 #define CL_NEXTKERNEL_SET_ARG_0(var) CL_NEXTKERNEL_SET_ARG_N(0, var)
 #define CL_NEXTKERNEL_SET_ARG(var) CL_NEXTKERNEL_SET_ARG_N(num++, var)
 
+static void append_sha256_compiler_options(struct _build_kernel_data *data, struct cgpu_info *cgpu, struct _algorithm_t *algorithm)
+{
+  char buf[255];
+  sprintf(buf, " -D VECTORS%d -D WORKVEC=%d",
+    cgpu->vwidth, (int)data->work_size * cgpu->vwidth);
+  strcat(data->compiler_options, buf);
+
+  sprintf(buf, "v%uwc%u", cgpu->vwidth, (int)data->work_size * cgpu->vwidth);
+  strcat(data->binary_filename, buf);
+}
+
 static void append_scrypt_compiler_options(struct _build_kernel_data *data, struct cgpu_info *cgpu, struct _algorithm_t *algorithm)
 {
   char buf[255];
@@ -246,6 +257,51 @@ static cl_int queue_sha256t_kernel(struct __clState *clState, struct _dev_blk_ct
 
   return status;
 }
+
+static cl_int queue_sha256t_phatk_kernel(struct __clState *clState, struct _dev_blk_ctx *blk, __maybe_unused cl_uint threads)
+{
+  cl_kernel *kernel = &clState->kernel;
+  cl_uint vwidth = clState->vwidth;
+  unsigned int i, num = 0;
+  cl_int status = 0;
+  uint *nonces;
+
+  CL_SET_BLKARG(ctx_a);
+  CL_SET_BLKARG(ctx_b);
+  CL_SET_BLKARG(ctx_c);
+  CL_SET_BLKARG(ctx_d);
+  CL_SET_BLKARG(ctx_e);
+  CL_SET_BLKARG(ctx_f);
+  CL_SET_BLKARG(ctx_g);
+  CL_SET_BLKARG(ctx_h);
+
+  CL_SET_BLKARG(cty_b);
+  CL_SET_BLKARG(cty_c);
+  CL_SET_BLKARG(cty_d);
+  CL_SET_BLKARG(cty_f);
+  CL_SET_BLKARG(cty_g);
+  CL_SET_BLKARG(cty_h);
+
+  nonces = alloca(sizeof(uint) * vwidth);
+  for (i = 0; i < vwidth; i++)
+    nonces[i] = blk->nonce + i;
+  CL_SET_VARG(vwidth, nonces);
+
+  CL_SET_BLKARG(W16);
+  CL_SET_BLKARG(W17);
+  CL_SET_BLKARG(PreVal4_2);
+  CL_SET_BLKARG(PreVal0);
+  CL_SET_BLKARG(PreW18);
+  CL_SET_BLKARG(PreW19);
+  CL_SET_BLKARG(PreW31);
+  CL_SET_BLKARG(PreW32);
+
+  CL_SET_ARG(clState->outputBuffer);
+
+  return status;
+}
+
+
 
 static cl_int queue_neoscrypt_kernel(_clState *clState, dev_blk_ctx *blk, __maybe_unused cl_uint threads)
 {
@@ -1250,6 +1306,7 @@ static algorithm_settings_t algos[] = {
   { "lbry", ALGO_LBRY, "", 1, 256, 256, 0, 0, 0xFF, 0xFFFFULL, 0x0000ffffUL, 2, 4 * 8 * 4194304, 0, lbry_regenhash, NULL, NULL, queue_lbry_kernel, gen_hash, NULL },
 
   { "sha256t", ALGO_SHA256T, "", 1, 1, 1, 0, 0, 0xFF, 0xFFFFULL, 0x0000ffffUL, 0, 0, CL_QUEUE_OUT_OF_ORDER_EXEC_MODE_ENABLE, sha256t_regenhash, sha256t_midstate, NULL, queue_sha256t_kernel, gen_hash, NULL },
+  { "sha256t-phatk", ALGO_SHA256T, "phatk121016", 1, 1, 1, 0, 0, 0xFF, 0xFFFFULL, 0x0000ffffUL, 0, 0, CL_QUEUE_OUT_OF_ORDER_EXEC_MODE_ENABLE, sha256t_regenhash, sha256t_midstate, sha256t_prepare_work, queue_sha256t_phatk_kernel, gen_hash, append_sha256_compiler_options },
   { "pascal", ALGO_PASCAL, "", 1, 1, 1, 0, 0, 0xFF, 0xFFFFULL, 0x0000ffffUL, 0, 0, CL_QUEUE_OUT_OF_ORDER_EXEC_MODE_ENABLE, pascal_regenhash, pascal_midstate, NULL, queue_pascal_kernel, NULL, NULL },
 
   // Terminator (do not remove)

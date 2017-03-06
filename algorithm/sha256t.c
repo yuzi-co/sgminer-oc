@@ -39,6 +39,8 @@
 #include "sph/sph_sha2.h"
 #include "algorithm/sha256t.h"
 
+extern void precalc_hash(dev_blk_ctx *blk, uint32_t *state, uint32_t *data);
+
 static const uint32_t diff1targ_sha256t = 0x000000ff;
 
 void sha256thash(void *state, const void *input)
@@ -60,6 +62,11 @@ void sha256thash(void *state, const void *input)
 
   memcpy(state, hash, 32);
 
+}
+
+void sha256t_prepare_work(dev_blk_ctx *blk, uint32_t *state, uint32_t *pdata)
+{
+  precalc_hash(blk, state, pdata + 16);
 }
 
 void sha256t_midstate(struct work *work)
