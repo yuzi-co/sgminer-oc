@@ -1249,7 +1249,7 @@ static algorithm_settings_t algos[] = {
 
   { "lbry", ALGO_LBRY, "", 1, 256, 256, 0, 0, 0xFF, 0xFFFFULL, 0x0000ffffUL, 2, 4 * 8 * 4194304, 0, lbry_regenhash, NULL, NULL, queue_lbry_kernel, gen_hash, NULL },
 
-  { "sha256t", ALGO_SHA256T, "", 1, 256, 256, 0, 0, 0xFF, 0xFFFFULL, 0x0000ffffUL, 0, 0, CL_QUEUE_OUT_OF_ORDER_EXEC_MODE_ENABLE, sha256t_regenhash, sha256t_midstate, NULL, queue_sha256t_kernel, gen_hash, NULL },
+  { "sha256t", ALGO_SHA256T, "", 1, 1, 1, 0, 0, 0xFF, 0xFFFFULL, 0x0000ffffUL, 0, 0, CL_QUEUE_OUT_OF_ORDER_EXEC_MODE_ENABLE, sha256t_regenhash, sha256t_midstate, NULL, queue_sha256t_kernel, gen_hash, NULL },
   { "pascal", ALGO_PASCAL, "", 1, 1, 1, 0, 0, 0xFF, 0xFFFFULL, 0x0000ffffUL, 0, 0, CL_QUEUE_OUT_OF_ORDER_EXEC_MODE_ENABLE, pascal_regenhash, pascal_midstate, NULL, queue_pascal_kernel, NULL, NULL },
 
   // Terminator (do not remove)
