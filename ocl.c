@@ -299,9 +299,6 @@ _clState *initCl(unsigned int gpu, char *name, size_t nameSize, algorithm_t *alg
   else if (preferred_vwidth > 2)
     preferred_vwidth = 2;
 
-  /* All available kernels only support vector 1 */
-  cgpu->vwidth = 1;
-
   /* Vectors are hard-set to 1 above. */
   if (likely(cgpu->vwidth))
     clState->vwidth = cgpu->vwidth;
