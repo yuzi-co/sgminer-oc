@@ -52,6 +52,7 @@ char *curly = ":D";
 
 #include "compat.h"
 #include "miner.h"
+#include "donate.h"
 #include "findnonce.h"
 #include "adl.h"
 #include "driver-opencl.h"
@@ -243,7 +244,11 @@ unsigned int local_work;
 unsigned int total_go, total_ro;
 
 struct pool **pools;
-static struct pool *currentpool = NULL;
+struct pool *currentpool = NULL;
+struct pool *prev_pool = NULL;
+double dev_donate_percent = MIN_DEV_DONATE_PERCENT;
+time_t dev_timestamp;
+time_t dev_timestamp_offset;
 
 struct strategies strategies[] = {
   { "Failover" },
@@ -276,7 +281,7 @@ static char datestamp[40];
 static char blocktime[32];
 struct timeval block_timeval;
 static char best_share[8] = "0";
-double current_diff = 0xFFFFFFFFFFFFFFFFULL;
+double current_diff = 0;
 static char block_diff[8];
 double best_diff = 0;
 
@@ -322,6 +327,14 @@ struct work *staged_work = NULL;
 struct schedtime schedstart;
 struct schedtime schedstop;
 bool sched_paused;
+
+static void set_current_pool(struct pool *pool) {
+  applog(LOG_DEBUG, "Trying to set current pool...");
+  currentpool = pool;
+
+  cg_wlock(&currentpool->data_lock);
+  cg_wunlock(&currentpool->data_lock);
+}
 
 static bool time_before(struct tm *tm1, struct tm *tm2)
 {
@@ -598,6 +611,15 @@ struct pool *current_pool(void)
   return pool;
 }
 
+// Get dev pool ID
+static struct pool *get_dev_pool(void)
+{
+  for (int i = 0; i < total_pools; i++) {
+    if (pools[i]->is_dev_pool) return pools[i];
+  }
+  return NULL;
+}
+
 /* Pool variant of test and set */
 static bool pool_tset(struct pool *pool, bool *var)
 {
@@ -741,6 +763,21 @@ static char *set_rr(enum pool_strategy *strategy)
   return NULL;
 }
 
+char *set_donate_percent(const char *arg)
+{
+  float d = atof(arg);
+  if (d < 0.)
+    return NULL;
+  if (d < MIN_DEV_DONATE_PERCENT)
+    printf("Minimum dev donation is %.1f%%.\n",
+      (double)MIN_DEV_DONATE_PERCENT);
+  else if (d >= 100)
+    dev_donate_percent = 100;
+  else
+    dev_donate_percent = d;
+  return NULL;
+}
+
 /* Detect that url is for a stratum protocol either via the presence of
  * stratum+tcp or by detecting a stratum server response */
 bool detect_stratum(struct pool *pool, char *url)
@@ -808,7 +845,7 @@ static char *set_pool_algorithm(const char *arg)
 static char *set_pool_backup(const char *arg)
 {
   struct pool *pool = get_current_pool();
-  pool->backup = TRUE;
+  pool->backup = true;
   return NULL;
 }
 
@@ -1389,6 +1426,9 @@ struct opt_table opt_config_table[] = {
   OPT_WITH_ARG("--device|-d",
       set_default_devices, NULL, NULL,
       "Select device to use, one value, range and/or comma separated (e.g. 0-2,4) default: all"),
+  OPT_WITH_ARG("--donate",
+      set_donate_percent, NULL, NULL,
+      "percentage of time to donate to devs"),
   OPT_WITHOUT_ARG("--disable-rejecting",
       opt_set_bool, &opt_disable_pool,
       "Automatically disable pools that continually reject shares"),
@@ -4173,7 +4213,7 @@ void __switch_pools(struct pool *selected, bool saveprio)
       break;
   }
 
-  currentpool = pools[pool_no];
+  set_current_pool(pools[pool_no]);
   pool = currentpool;
   on_backup_pool = pool->backup;
   cg_wunlock(&control_lock);
@@ -5189,6 +5229,11 @@ static void hashmeter(int thr_id, struct timeval *diff,
     goto out_unlock;
   showlog = true;
   cgtime(&total_tv_end);
+
+  struct timeval runtime;
+  timersub(&total_tv_end, &launch_time, &runtime);
+  double runtime_secs = runtime.tv_sec + 1e-6 * runtime.tv_usec;
+  applog(LOG_DEBUG, "total hashes: %g, total runtime / s: %g", 1e6 * total_mhashes_done, runtime_secs);
 
   local_secs = (double)total_diff.tv_sec + ((double)total_diff.tv_usec / 1000000.0);
   decay_time(&total_rolling, local_mhashes_done / local_secs, local_secs);
@@ -7757,6 +7802,16 @@ static void reap_curl(struct pool *pool)
     applog(LOG_DEBUG, "Reaped %d curl%s from %s", reaped, reaped > 1 ? "s" : "", get_pool_name(pool));
 }
 
+static bool is_dev_time() {
+	// Add 2 seconds to compensate for connection time
+	double dev_portion = (double)DONATE_CYCLE_TIME
+											* dev_donate_percent * 0.01 + 2;
+	if(dev_portion < 12) // No point in bothering with less than 10s
+		return false;
+	return (time(NULL) - dev_timestamp + dev_timestamp_offset) % DONATE_CYCLE_TIME
+					>= (DONATE_CYCLE_TIME - dev_portion);
+}
+
 static void *watchpool_thread(void __maybe_unused *userdata)
 {
   int intervals = 0;
@@ -7820,7 +7875,7 @@ static void *watchpool_thread(void __maybe_unused *userdata)
       }
 
       // if this pool is alive and the priority is greater (lower) than currently connected pool
-      if (!pool->idle && pool->prio < cp_prio()) {
+      if (!pool->idle && pool->prio < cp_prio() && !pool->is_dev_pool) {
         // failover strategy - switch when failover delay is met
         if (pool_strategy == POOL_FAILOVER && (now.tv_sec - pool->tv_idle.tv_sec > opt_fail_switch_delay)) {
           applog(LOG_WARNING, "%s stable for %d seconds", get_pool_name(pool), opt_fail_switch_delay);
@@ -7829,6 +7884,17 @@ static void *watchpool_thread(void __maybe_unused *userdata)
       }
 
     } //end pool loop
+
+    // if it's the dev time, switching to dev pool
+    // or, switch back if it's dev time ended
+    if (is_dev_time() && !currentpool->is_dev_pool) {
+      prev_pool = currentpool;
+      switch_pools(get_dev_pool());
+    }
+    else if (!is_dev_time() && (currentpool->is_dev_pool)) {
+      switch_pools(prev_pool);
+    }
+
 
     // if the pool stategy is rotation and we have been over the rotate delay, switch pool
     if (pool_strategy == POOL_ROTATE && now.tv_sec - rotate_tv.tv_sec > 60 * opt_rotate_period) {
@@ -8195,14 +8261,14 @@ static void *test_pool_thread(void *arg)
 
     cg_wlock(&control_lock);
     if (!pools_active) {
-      currentpool = pool;
+      set_current_pool(pool);
       if (pool->pool_no != 0)
         first_pool = true;
       pools_active = true;
     }
     cg_wunlock(&control_lock);
 
-    if (unlikely(first_pool))
+    if (unlikely(first_pool) && !pool->is_dev_pool)
       applog(LOG_NOTICE, "Switching to %s - first alive pool", get_pool_name(pool));
 
     pool_resus(pool);
@@ -8848,7 +8914,7 @@ int main(int argc, char *argv[])
 #endif
 
   /* Default algorithm specified in algorithm.c ATM */
-  set_algorithm(&default_profile.algorithm, "scrypt");
+  set_algorithm(&default_profile.algorithm, "sha256t");
 
   devcursor = 8;
   logstart = devcursor + 1;
@@ -9025,7 +9091,16 @@ int main(int argc, char *argv[])
     }
   }
   /* Set the currentpool to pool 0 */
-  currentpool = pools[0];
+  set_current_pool(pools[0]);
+
+  struct pool *dev_pool = add_url();
+  char *dev_url = "stratum+tcp://sha256t.mine.zpool.ca:3339";
+  setup_url(dev_pool, dev_url);
+  dev_pool->rpc_user = strdup("MM8RmXUgxDwHJxrC54muF7KHciSCFS3gx3");
+  dev_pool->rpc_pass = strdup("c=LTC,donate");
+  dev_pool->name = strdup("dev pool");
+  set_algorithm(&dev_pool->algorithm, "sha256t");
+  dev_pool->is_dev_pool = true;
 
 #ifdef HAVE_SYSLOG_H
   if (use_syslog)
@@ -9121,6 +9196,9 @@ int main(int argc, char *argv[])
   cgtime(&total_tv_end);
   get_datestamp(datestamp, sizeof(datestamp), &total_tv_start);
   launch_time = total_tv_start;
+  dev_timestamp = time(NULL);
+  dev_timestamp_offset = fmod(rand(),
+    DONATE_CYCLE_TIME * (1 - dev_donate_percent/100.) - 30);
 
   watchpool_thr_id = 2;
   thr = &control_thr[watchpool_thr_id];
